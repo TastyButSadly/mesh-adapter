@@ -1,0 +1,1 @@
+"""Application-oriented adaptation examples."""

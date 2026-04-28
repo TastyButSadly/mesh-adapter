@@ -1,6 +1,8 @@
+import numpy as np
 import torch
 
 from diff_mesh_adapter import AdaptationConfig, MeshState, adapt_cell_area_equalization, cell_abs_areas, cell_signed_areas
+from examples.firedrake._diff_adapter_subprocess import adapt_coordinates
 
 
 def _four_triangle_mesh() -> MeshState:
@@ -93,3 +95,90 @@ def test_adapter_stops_after_patience_without_significant_improvement():
     assert result.early_stopped
     assert result.steps_completed < 100
     assert len(result.loss_history) == result.steps_completed + 1
+
+
+def test_adapter_boundary_edge_barrier_supports_2d_quads():
+    points = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.5, 0.0],
+            [1.0, 0.0],
+            [0.0, 0.5],
+            [0.45, 0.40],
+            [1.0, 0.5],
+            [0.0, 1.0],
+            [0.5, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=torch.float64,
+    )
+    cells = torch.tensor(
+        [
+            [0, 1, 4, 3],
+            [1, 2, 5, 4],
+            [3, 4, 7, 6],
+            [4, 5, 8, 7],
+        ],
+        dtype=torch.long,
+    )
+    boundary_nodes = torch.tensor([True, True, True, True, False, True, True, True, True])
+    mesh = MeshState(points=points, cell_blocks=(cells,), boundary_nodes=boundary_nodes)
+
+    result = adapt_cell_area_equalization(
+        mesh,
+        AdaptationConfig(
+            steps=2,
+            lr=1e-3,
+            edge_length_barrier_weight=0.5,
+            boundary_edge_length_barrier_weight=1.0,
+            early_stopping_patience=None,
+        ),
+    )
+
+    assert result.mesh.points.shape == mesh.points.shape
+
+
+def test_firedrake_adapter_exchange_accepts_tetra_cells():
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.5, 0.5, 0.5],
+        ],
+        dtype=np.float64,
+    )
+    cells = np.array(
+        [
+            [0, 1, 2, 8],
+            [0, 2, 3, 8],
+            [4, 6, 5, 8],
+            [4, 7, 6, 8],
+            [0, 4, 5, 8],
+            [0, 5, 1, 8],
+            [1, 5, 6, 8],
+            [1, 6, 2, 8],
+            [2, 6, 7, 8],
+            [2, 7, 3, 8],
+            [3, 7, 4, 8],
+            [3, 4, 0, 8],
+        ],
+        dtype=np.int64,
+    )
+    monitor = np.ones(points.shape[0], dtype=np.float64)
+
+    adapted, info = adapt_coordinates(
+        points_np=points,
+        cells_np=cells,
+        monitor_np=monitor,
+        steps=2,
+        lr=1.0e-4,
+    )
+
+    assert adapted.shape == points.shape
+    assert info["steps_completed"] == 2

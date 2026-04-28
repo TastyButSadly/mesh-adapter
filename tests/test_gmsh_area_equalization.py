@@ -3,8 +3,9 @@ from pathlib import Path
 import torch
 
 from diff_mesh_adapter import AdaptationConfig, adapt_cell_area_equalization, cell_abs_areas, cell_signed_areas
-from diff_mesh_adapter.io import generate_nonconvex_hole_gmsh, generate_unit_square_gmsh, read_gmsh_mesh
+from diff_mesh_adapter.io import read_gmsh_mesh
 from diff_mesh_adapter.visualization import save_adaptation_artifacts
+from examples.templates.gmsh_meshes import generate_nonconvex_hole_gmsh, generate_unit_square_gmsh
 
 
 def test_gmsh_mesh_import_and_area_equalization(tmp_path):

@@ -6,8 +6,9 @@ from pathlib import Path
 import torch
 
 from diff_mesh_adapter import AdaptationConfig, adapt_monitor_weighted_area, cell_abs_areas, cell_centroids, gaussian_cell_monitor
-from diff_mesh_adapter.io import generate_unit_square_gmsh, read_gmsh_mesh
+from diff_mesh_adapter.io import read_gmsh_mesh
 from diff_mesh_adapter.visualization import save_adaptation_artifacts
+from examples.templates.gmsh_meshes import generate_unit_square_gmsh
 
 
 def _near_feature_area(mesh, center=(0.28, 0.52), radius=0.18) -> torch.Tensor:

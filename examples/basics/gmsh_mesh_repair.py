@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from diff_mesh_adapter import AdaptationConfig, adapt_mesh_quality, min_triangle_angle_degrees, normalized_edge_length_variance
-from diff_mesh_adapter.demo import perturb_internal_nodes
-from diff_mesh_adapter.io import generate_unit_square_gmsh, read_gmsh_mesh
+from diff_mesh_adapter.io import read_gmsh_mesh
 from diff_mesh_adapter.visualization import save_adaptation_artifacts
+from examples.templates.gmsh_meshes import generate_unit_square_gmsh
+from examples.templates.mesh_perturbation import perturb_internal_nodes
 
 
 def main() -> None:

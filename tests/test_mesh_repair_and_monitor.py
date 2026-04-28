@@ -16,8 +16,9 @@ from diff_mesh_adapter import (
     min_triangle_angle_degrees,
     normalized_edge_length_variance,
 )
-from diff_mesh_adapter.demo import perturb_internal_nodes
-from diff_mesh_adapter.io import generate_unit_square_gmsh, read_gmsh_mesh
+from diff_mesh_adapter.io import read_gmsh_mesh
+from examples.templates.gmsh_meshes import generate_unit_square_gmsh
+from examples.templates.mesh_perturbation import perturb_internal_nodes
 from tests.helpers import assert_artifacts_exist, save_demo_artifacts
 
 
