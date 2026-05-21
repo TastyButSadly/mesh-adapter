@@ -11,7 +11,8 @@ from diff_mesh_adapter.mesh import MeshState
 Tensor = torch.Tensor
 
 
-def read_gmsh_mesh(path: str | Path, *, dtype: torch.dtype = torch.float64, device: torch.device | str | None = None) -> MeshState:
+def read_gmsh_mesh(path: str | Path, *, dtype: torch.dtype = torch.float64,
+                   device: torch.device | str | None = None) -> MeshState:
     import meshio
 
     mesh = meshio.read(path)
@@ -72,9 +73,9 @@ def _orient_tetra_block_positive(points: Tensor, block: Tensor) -> Tensor:
 
 
 def _boundary_nodes_from_cell_adjacency(
-    num_points: int,
-    cell_blocks: tuple[Tensor, ...],
-    device: torch.device,
+        num_points: int,
+        cell_blocks: tuple[Tensor, ...],
+        device: torch.device,
 ) -> Tensor:
     mask = torch.zeros(num_points, dtype=torch.bool, device=device)
     edge_count: dict[tuple[int, int], int] = {}
@@ -93,9 +94,9 @@ def _boundary_nodes_from_cell_adjacency(
 
 
 def _boundary_nodes_from_tetra_faces(
-    num_points: int,
-    cell_blocks: tuple[Tensor, ...],
-    device: torch.device,
+        num_points: int,
+        cell_blocks: tuple[Tensor, ...],
+        device: torch.device,
 ) -> Tensor:
     mask = torch.zeros(num_points, dtype=torch.bool, device=device)
     face_count: dict[tuple[int, int, int], int] = {}

@@ -8,9 +8,9 @@ Tensor = torch.Tensor
 
 
 def cell_swept_measure_fluxes(
-    old_points: Tensor,
-    new_points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
+        old_points: Tensor,
+        new_points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
 ) -> tuple[Tensor, ...]:
     """Integrated signed mesh fluxes for ordered 2D cells moving linearly in time."""
     _validate_point_motion(old_points, new_points)
@@ -20,24 +20,25 @@ def cell_swept_measure_fluxes(
 
 
 def geometric_conservation_residual(
-    old_points: Tensor,
-    new_points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
+        old_points: Tensor,
+        new_points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
 ) -> Tensor:
     """Residual of sum(mesh fluxes) = new cell measure - old cell measure."""
-    flux_change = torch.cat([fluxes.sum(dim=1) for fluxes in cell_swept_measure_fluxes(old_points, new_points, cell_blocks)])
+    flux_change = torch.cat(
+        [fluxes.sum(dim=1) for fluxes in cell_swept_measure_fluxes(old_points, new_points, cell_blocks)])
     old_measures = cell_signed_measures(old_points, cell_blocks)
     new_measures = cell_signed_measures(new_points, cell_blocks)
     return flux_change - (new_measures - old_measures)
 
 
 def update_constant_cell_average_with_mesh_flux(
-    cell_values: Tensor,
-    old_points: Tensor,
-    new_points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
-    *,
-    eps: float = 1e-12,
+        cell_values: Tensor,
+        old_points: Tensor,
+        new_points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
+        *,
+        eps: float = 1e-12,
 ) -> Tensor:
     """Move a piecewise-constant conserved scalar with only mesh-motion flux.
 
@@ -53,12 +54,12 @@ def update_constant_cell_average_with_mesh_flux(
 
 
 def update_constant_cell_average_without_mesh_flux(
-    cell_values: Tensor,
-    old_points: Tensor,
-    new_points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
-    *,
-    eps: float = 1e-12,
+        cell_values: Tensor,
+        old_points: Tensor,
+        new_points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
+        *,
+        eps: float = 1e-12,
 ) -> Tensor:
     """Move cell averages by changing volumes but ignoring mesh-motion flux."""
     old_measures, new_measures, _ = _cell_measure_motion(old_points, new_points, cell_blocks, eps)
@@ -92,10 +93,10 @@ def _signed_polygon_areas(vertices: Tensor) -> Tensor:
 
 
 def _cell_measure_motion(
-    old_points: Tensor,
-    new_points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
-    eps: float,
+        old_points: Tensor,
+        new_points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
+        eps: float,
 ) -> tuple[Tensor, Tensor, Tensor]:
     old_signed = cell_signed_measures(old_points, cell_blocks)
     new_signed = cell_signed_measures(new_points, cell_blocks)
@@ -108,6 +109,7 @@ def _cell_measure_motion(
     if bool((new_measures <= eps).any()):
         raise ValueError("new mesh contains inverted or near-degenerate cells")
 
-    signed_change = torch.cat([fluxes.sum(dim=1) for fluxes in cell_swept_measure_fluxes(old_points, new_points, cell_blocks)])
+    signed_change = torch.cat(
+        [fluxes.sum(dim=1) for fluxes in cell_swept_measure_fluxes(old_points, new_points, cell_blocks)])
     measure_change = signed_change * orientation
     return old_measures, new_measures, measure_change

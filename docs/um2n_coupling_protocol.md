@@ -87,6 +87,8 @@ The current UM2N reference-mesh baseline applies at most one correction per
 physical step: solve, compute the monitor from the new solution, produce a new
 coordinate target, move the mesh once, and use
 `u_grid = (x_new - x_old) / dt` only for the next Navier-Stokes step.
+This ordering matches the original UM2N-style engineering demo but is not the
+preferred mathematical coupling for the differentiable adapter.
 
 The UM2N reference-mesh Monge-Ampere baseline is:
 
@@ -113,6 +115,19 @@ relative advection, reference-mesh monitor construction, monitor clipping and
 normalization, and grid-speed relaxation guard. The only changed component is
 the coordinate generator: the Monge-Ampere or UM2N network coordinate update is
 replaced by `adapt_monitor_weighted_area`.
+
+The default adapter exchange remains the file-based `.npz` protocol. For
+timing-sensitive local Docker runs, use `--adapter-transport tcp`; it keeps the
+same adapter service process alive, sends array payloads over one length-prefixed
+TCP connection, and caches fixed connectivity after the first request.
+
+The differentiable-adapter Firedrake path now uses a direct ALE-in-step order:
+build the monitor from the accepted state at the beginning of an adaptation
+step, compute the target coordinates, set
+`u_grid = (x_target - x_current) / dt`, solve the Navier-Stokes step with
+`u_adv = u_now - u_grid`, and then accept the new solution on the moved mesh.
+The rationale and remaining GCL checks are recorded in
+`docs/ale_in_step_notes.md`.
 
 For faster engineering runs where exact UM2N reference-frame parity is not the
 goal, skip the reference-mesh projection and compute the monitor on the live

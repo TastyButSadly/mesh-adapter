@@ -20,6 +20,18 @@ def signed_polygon_areas(points: Tensor, cells: Tensor) -> Tensor:
     return 0.5 * torch.sum(x * y_next - y * x_next, dim=1)
 
 
+def triangle_signed_areas(points: Tensor, cells: Tensor) -> Tensor:
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError("triangle_signed_areas expects points with shape (n_points, 2)")
+    if cells.ndim != 2 or cells.shape[1] != 3:
+        raise ValueError("triangle_signed_areas expects cells with shape (n_cells, 3)")
+
+    vertices = points[cells]
+    edge1 = vertices[:, 1] - vertices[:, 0]
+    edge2 = vertices[:, 2] - vertices[:, 0]
+    return 0.5 * (edge1[:, 0] * edge2[:, 1] - edge1[:, 1] * edge2[:, 0])
+
+
 def triangle_signed_areas_and_shape_energy(points: Tensor, cells: Tensor, eps: float = 1e-12) -> tuple[Tensor, Tensor]:
     """Signed areas and scale-invariant equilateral-triangle energy for one triangle block."""
     if points.ndim != 2 or points.shape[1] != 2:
@@ -32,10 +44,9 @@ def triangle_signed_areas_and_shape_energy(points: Tensor, cells: Tensor, eps: f
     edge2 = vertices[:, 2] - vertices[:, 0]
     signed_areas = 0.5 * (edge1[:, 0] * edge2[:, 1] - edge1[:, 1] * edge2[:, 0])
 
-    physical = torch.stack([edge1, edge2], dim=2)
-    jacobian = physical @ _equilateral_triangle_inverse(points.dtype, points.device)
+    jacobian_col1 = -0.5773502691896258 * edge1 + 1.1547005383792517 * edge2
     det = (signed_areas * _equilateral_triangle_inverse_det(points.dtype, points.device) * 2.0).abs().clamp_min(eps)
-    frobenius_sq = jacobian.square().sum(dim=(1, 2))
+    frobenius_sq = edge1.square().sum(dim=1) + jacobian_col1.square().sum(dim=1)
     shape_energy = frobenius_sq / (2.0 * det) - 1.0
     return signed_areas, shape_energy
 
@@ -88,8 +99,18 @@ def cell_signed_measures(points: Tensor, cell_blocks: tuple[Tensor, ...]) -> Ten
     if points.ndim != 2:
         raise ValueError("points must have shape (n_points, dim)")
     if points.shape[1] == 2:
+        if len(cell_blocks) == 1:
+            block = cell_blocks[0]
+            if block.shape[1] == 3:
+                return triangle_signed_areas(points, block)
+            return signed_polygon_areas(points, block)
         return torch.cat([signed_polygon_areas(points, block) for block in cell_blocks], dim=0)
     if points.shape[1] == 3:
+        if len(cell_blocks) == 1:
+            block = cell_blocks[0]
+            if block.shape[1] != 4:
+                raise NotImplementedError("V1 3D geometry supports tetrahedral cell blocks only")
+            return tetra_signed_volumes(points, block)
         volumes = []
         for block in cell_blocks:
             if block.shape[1] != 4:
@@ -104,14 +125,19 @@ def cell_abs_measures(points: Tensor, cell_blocks: tuple[Tensor, ...]) -> Tensor
 
 
 def cell_signed_measures_and_shape_energy(
-    points: Tensor,
-    cell_blocks: tuple[Tensor, ...],
-    eps: float = 1e-12,
+        points: Tensor,
+        cell_blocks: tuple[Tensor, ...],
+        eps: float = 1e-12,
 ) -> tuple[Tensor, Tensor]:
     """Signed measures and per-cell shape energy in one geometry pass per block."""
     if points.ndim != 2:
         raise ValueError("points must have shape (n_points, dim)")
     if points.shape[1] == 2:
+        if len(cell_blocks) == 1:
+            block = cell_blocks[0]
+            if block.shape[1] == 3:
+                return triangle_signed_areas_and_shape_energy(points, block, eps)
+            return signed_polygon_areas(points, block), _normalized_polygon_edge_length_variance(points, block, eps)
         signed = []
         energy = []
         for block in cell_blocks:
@@ -124,6 +150,11 @@ def cell_signed_measures_and_shape_energy(
                 energy.append(_normalized_polygon_edge_length_variance(points, block, eps))
         return torch.cat(signed, dim=0), torch.cat(energy, dim=0)
     if points.shape[1] == 3:
+        if len(cell_blocks) == 1:
+            block = cell_blocks[0]
+            if block.shape[1] != 4:
+                raise NotImplementedError("V1 3D geometry supports tetrahedral cell blocks only")
+            return tet_signed_volumes_and_shape_energy(points, block, eps)
         signed = []
         energy = []
         for block in cell_blocks:
@@ -214,17 +245,6 @@ def tetra_edge_lengths(points: Tensor, cells: Tensor) -> Tensor:
     )
     vertices = points[cells]
     return torch.linalg.norm(vertices[:, pairs[:, 0]] - vertices[:, pairs[:, 1]], dim=2)
-
-
-def _equilateral_triangle_inverse(dtype: torch.dtype, device: torch.device) -> Tensor:
-    return torch.tensor(
-        [
-            [1.0, -0.5773502691896258],
-            [0.0, 1.1547005383792517],
-        ],
-        dtype=dtype,
-        device=device,
-    )
 
 
 def _equilateral_triangle_inverse_det(dtype: torch.dtype, device: torch.device) -> Tensor:

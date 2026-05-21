@@ -17,12 +17,12 @@ from diff_mesh_adapter.mesh import MeshState
 
 
 def save_mesh_area_comparison(
-    initial_mesh: MeshState,
-    adapted_mesh: MeshState,
-    path: str | Path,
-    *,
-    title: str = "Gmsh cell area equalization",
-    dpi: int = 180,
+        initial_mesh: MeshState,
+        adapted_mesh: MeshState,
+        path: str | Path,
+        *,
+        title: str = "Gmsh cell area equalization",
+        dpi: int = 180,
 ) -> Path:
     """Save a before/after mesh plot colored by fixed-topology cell area."""
     import matplotlib.pyplot as plt
@@ -42,8 +42,8 @@ def save_mesh_area_comparison(
 
     collections = []
     for ax, polys, areas, panel_title in (
-        (axes[0], initial_polys, initial_areas, f"Before: std={initial_areas.std():.4g}"),
-        (axes[1], adapted_polys, adapted_areas, f"After: std={adapted_areas.std():.4g}"),
+            (axes[0], initial_polys, initial_areas, f"Before: std={initial_areas.std():.4g}"),
+            (axes[1], adapted_polys, adapted_areas, f"After: std={adapted_areas.std():.4g}"),
     ):
         collection = PolyCollection(
             polys,
@@ -70,11 +70,11 @@ def save_mesh_area_comparison(
 
 
 def save_mesh_area_snapshot(
-    mesh: MeshState,
-    path: str | Path,
-    *,
-    title: str = "Mesh cell areas",
-    dpi: int = 180,
+        mesh: MeshState,
+        path: str | Path,
+        *,
+        title: str = "Mesh cell areas",
+        dpi: int = 180,
 ) -> Path:
     """Save one mesh state colored by fixed-topology cell area."""
     import matplotlib.pyplot as plt
@@ -108,14 +108,14 @@ def save_mesh_area_snapshot(
 
 
 def save_mesh_cell_scalar_comparison(
-    initial_mesh: MeshState,
-    adapted_mesh: MeshState,
-    scalar_fn,
-    path: str | Path,
-    *,
-    title: str,
-    scalar_label: str = "cell scalar",
-    dpi: int = 180,
+        initial_mesh: MeshState,
+        adapted_mesh: MeshState,
+        scalar_fn,
+        path: str | Path,
+        *,
+        title: str,
+        scalar_label: str = "cell scalar",
+        dpi: int = 180,
 ) -> Path:
     """Save a before/after 2D mesh plot colored by a cell-centered scalar."""
     import matplotlib.pyplot as plt
@@ -132,8 +132,8 @@ def save_mesh_cell_scalar_comparison(
     fig.suptitle(title)
     collections = []
     for ax, polys, values, panel_title in (
-        (axes[0], initial_polys, initial_values, "Before"),
-        (axes[1], adapted_polys, adapted_values, "After"),
+            (axes[0], initial_polys, initial_values, "Before"),
+            (axes[1], adapted_polys, adapted_values, "After"),
     ):
         collection = PolyCollection(
             polys,
@@ -196,10 +196,10 @@ def _area_norm(areas: np.ndarray):
 
 
 def save_mesh_vtu(
-    mesh: MeshState,
-    path: str | Path,
-    cell_data: dict[str, object] | None = None,
-    point_data: dict[str, object] | None = None,
+        mesh: MeshState,
+        path: str | Path,
+        cell_data: dict[str, object] | None = None,
+        point_data: dict[str, object] | None = None,
 ) -> Path:
     """Save a fixed-topology 2D triangle or 3D tetra mesh as a VTU file."""
     import meshio
@@ -218,10 +218,10 @@ def save_mesh_vtu(
 
 
 def save_adaptation_vtu_artifacts(
-    initial_mesh: MeshState,
-    result: AdaptationResult,
-    output_dir: str | Path,
-    prefix: str,
+        initial_mesh: MeshState,
+        result: AdaptationResult,
+        output_dir: str | Path,
+        prefix: str,
 ) -> dict[str, Path | list[Path]]:
     """Save ParaView VTU/PVD artifacts and a loss plot for an adaptation run."""
     output = Path(output_dir)
@@ -307,7 +307,8 @@ def _normalize_point_data(point_data: dict[str, object] | None, num_points: int)
     return normalized
 
 
-def _normalize_cell_data(cell_data: dict[str, object] | None, cell_blocks: tuple[object, ...]) -> dict[str, list[np.ndarray]]:
+def _normalize_cell_data(cell_data: dict[str, object] | None, cell_blocks: tuple[object, ...]) -> dict[
+    str, list[np.ndarray]]:
     if cell_data is None:
         return {}
 
@@ -370,7 +371,8 @@ def _mesh_point_diagnostics(mesh: MeshState) -> dict[str, np.ndarray]:
 def torch_displacement_norm(initial_mesh: MeshState, mesh: MeshState) -> np.ndarray:
     import torch
 
-    point_displacement = torch.linalg.norm(mesh.points - initial_mesh.points.to(device=mesh.points.device, dtype=mesh.points.dtype), dim=1)
+    point_displacement = torch.linalg.norm(
+        mesh.points - initial_mesh.points.to(device=mesh.points.device, dtype=mesh.points.dtype), dim=1)
     cell_values = []
     for block in mesh.cell_blocks:
         cell_values.append(point_displacement[block].mean(dim=1).detach().cpu().numpy())
@@ -427,7 +429,8 @@ def _pvd_relative_path(base: Path, path: Path) -> str:
         return path.as_posix()
 
 
-def save_loss_history(loss_history: list[float], path: str | Path, *, title: str = "Adaptation loss", dpi: int = 180) -> Path:
+def save_loss_history(loss_history: list[float], path: str | Path, *, title: str = "Adaptation loss",
+                      dpi: int = 180) -> Path:
     import matplotlib.pyplot as plt
 
     output = Path(path)
@@ -445,14 +448,14 @@ def save_loss_history(loss_history: list[float], path: str | Path, *, title: str
 
 
 def save_adaptation_artifacts(
-    initial_mesh: MeshState,
-    result: AdaptationResult,
-    output_dir: str | Path,
-    *,
-    prefix: str,
-    title: str,
-    include_gif: bool = True,
-    fps: int = 12,
+        initial_mesh: MeshState,
+        result: AdaptationResult,
+        output_dir: str | Path,
+        *,
+        prefix: str,
+        title: str,
+        include_gif: bool = True,
+        fps: int = 12,
 ) -> dict[str, Path]:
     output = Path(output_dir)
     paths = {
@@ -490,16 +493,16 @@ def save_adaptation_artifacts(
 
 
 def save_adaptation_gif(
-    initial_mesh: MeshState,
-    result: AdaptationResult,
-    path: str | Path,
-    *,
-    title: str = "Mesh adaptation",
-    fps: int = 12,
-    dpi: int = 120,
-    cell_scalar_fn=None,
-    scalar_label: str = "cell area",
-    cmap: str = "viridis",
+        initial_mesh: MeshState,
+        result: AdaptationResult,
+        path: str | Path,
+        *,
+        title: str = "Mesh adaptation",
+        fps: int = 12,
+        dpi: int = 120,
+        cell_scalar_fn=None,
+        scalar_label: str = "cell area",
+        cmap: str = "viridis",
 ) -> Path:
     """Save a GIF with the current mesh and loss curve at each stored optimization step."""
     if result.points_history is None or not result.points_history:
@@ -514,11 +517,13 @@ def save_adaptation_gif(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     history_meshes = [
-        MeshState(points=points.to(dtype=initial_mesh.points.dtype), cell_blocks=initial_mesh.cell_blocks, boundary_nodes=initial_mesh.boundary_nodes)
+        MeshState(points=points.to(dtype=initial_mesh.points.dtype), cell_blocks=initial_mesh.cell_blocks,
+                  boundary_nodes=initial_mesh.boundary_nodes)
         for points in result.points_history
     ]
     if cell_scalar_fn is None:
-        scalar_history = [cell_abs_areas(mesh.points, mesh.cell_blocks).detach().cpu().numpy() for mesh in history_meshes]
+        scalar_history = [cell_abs_areas(mesh.points, mesh.cell_blocks).detach().cpu().numpy() for mesh in
+                          history_meshes]
     else:
         scalar_history = [_cell_scalar_values(mesh, cell_scalar_fn) for mesh in history_meshes]
     all_scalar_values = np.concatenate(scalar_history)
@@ -589,18 +594,18 @@ def save_adaptation_gif(
 
 
 def save_transient_adaptation_gif(
-    meshes: list[MeshState],
-    cell_scalar_fns: list,
-    series_values: list[float],
-    path: str | Path,
-    *,
-    times: list[float] | None = None,
-    title: str = "Transient mesh adaptation",
-    scalar_label: str = "monitor",
-    series_label: str = "final optimization loss",
-    fps: int = 8,
-    dpi: int = 120,
-    cmap: str = "magma",
+        meshes: list[MeshState],
+        cell_scalar_fns: list,
+        series_values: list[float],
+        path: str | Path,
+        *,
+        times: list[float] | None = None,
+        title: str = "Transient mesh adaptation",
+        scalar_label: str = "monitor",
+        series_label: str = "final optimization loss",
+        fps: int = 8,
+        dpi: int = 120,
+        cmap: str = "magma",
 ) -> Path:
     """Save a GIF over physical time for a sequence of already adapted meshes."""
     if not meshes:

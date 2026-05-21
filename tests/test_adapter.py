@@ -1,8 +1,11 @@
+import socket
+
 import numpy as np
 import torch
 
 from diff_mesh_adapter import AdaptationConfig, MeshState, adapt_cell_area_equalization, cell_abs_areas, cell_signed_areas
-from examples.firedrake._diff_adapter_subprocess import adapt_coordinates
+from examples.firedrake._adapter_tcp_protocol import recv_message, send_message
+from examples.firedrake._diff_adapter_subprocess import AdapterTopologyCache, adapt_coordinates
 
 
 def _four_triangle_mesh() -> MeshState:
@@ -27,6 +30,23 @@ def _four_triangle_mesh() -> MeshState:
     )
     boundary_nodes = torch.tensor([True, True, True, True, False])
     return MeshState(points=points, cell_blocks=(cells,), boundary_nodes=boundary_nodes)
+
+
+def test_adapter_tcp_protocol_round_trips_arrays_and_scalars():
+    left, right = socket.socketpair()
+    try:
+        points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float64)
+        cells = np.array([[0, 1, 0]], dtype=np.int64)
+        send_message(left, scalars={"steps": 2, "profile": "regularized"}, arrays={"points": points, "cells": cells})
+
+        scalars, arrays = recv_message(right)
+    finally:
+        left.close()
+        right.close()
+
+    assert scalars == {"steps": 2, "profile": "regularized"}
+    assert np.array_equal(arrays["points"], points)
+    assert np.array_equal(arrays["cells"], cells)
 
 
 def test_adapter_equalizes_synthetic_triangle_areas_and_keeps_boundary_fixed():
@@ -95,6 +115,26 @@ def test_adapter_stops_after_patience_without_significant_improvement():
     assert result.early_stopped
     assert result.steps_completed < 100
     assert len(result.loss_history) == result.steps_completed + 1
+
+
+def test_adapter_can_skip_step_diagnostics():
+    mesh = _four_triangle_mesh()
+
+    result = adapt_cell_area_equalization(
+        mesh,
+        AdaptationConfig(
+            steps=2,
+            lr=1e-2,
+            movement_weight=0.0,
+            shape_weight=0.0,
+            collect_step_diagnostics=False,
+        ),
+    )
+
+    assert len(result.loss_history) == result.steps_completed + 1
+    assert result.area_std_history == []
+    assert result.min_area_history == []
+    assert result.lr_history == []
 
 
 def test_adapter_boundary_edge_barrier_supports_2d_quads():
@@ -182,3 +222,63 @@ def test_firedrake_adapter_exchange_accepts_tetra_cells():
 
     assert adapted.shape == points.shape
     assert info["steps_completed"] == 2
+
+
+def test_firedrake_adapter_exchange_caches_topology_and_supports_float32():
+    points = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.22, 0.37],
+        ],
+        dtype=np.float32,
+    )
+    cells = np.array(
+        [
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [3, 0, 4],
+        ],
+        dtype=np.int64,
+    )
+    monitor = np.ones(points.shape[0], dtype=np.float32)
+    cache = AdapterTopologyCache()
+
+    adapted, info = adapt_coordinates(
+        points_np=points,
+        cells_np=cells,
+        monitor_np=monitor,
+        steps=1,
+        lr=1.0e-4,
+        dtype="float32",
+        topology_cache=cache,
+    )
+    adapted_again, _ = adapt_coordinates(
+        points_np=points,
+        cells_np=cells,
+        monitor_np=monitor,
+        steps=1,
+        lr=1.0e-4,
+        dtype="float32",
+        topology_cache=cache,
+    )
+    adapted_from_cell_monitor, _ = adapt_coordinates(
+        points_np=points,
+        cells_np=cells,
+        cell_monitor_np=np.ones(cells.shape[0], dtype=np.float32),
+        steps=1,
+        lr=1.0e-4,
+        dtype="float32",
+        topology_cache=cache,
+    )
+
+    assert adapted.shape == points.shape
+    assert adapted.dtype == np.float32
+    assert adapted_again.shape == points.shape
+    assert adapted_from_cell_monitor.shape == points.shape
+    assert info["steps_completed"] == 1
+    assert cache.misses == 1
+    assert cache.hits == 2
