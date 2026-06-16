@@ -1,16 +1,18 @@
 FROM firedrakeproject/firedrake-vanilla-default:latest
 
-# Install system deps for gmsh
+# Install adapter dependencies
+# First install torch, then restore system libgfortran to avoid PETSc conflict
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && \
+    rm -f /usr/local/lib/python3.12/dist-packages/torch/lib/libgfortran*.so* && \
+    ldconfig
+
+# System deps for gmsh
 RUN apt-get update -qq && \
-    apt-get install -y -qq libgl1 libglu1-mesa libxft2 libx11-6 libxext6 libxrender1 libsm6 libice6 libfontconfig1 > /dev/null 2>&1 && \
+    apt-get install -y -qq libgl1 libglu1-mesa libxft2 > /dev/null 2>&1 && \
     rm -rf /var/lib/apt/lists/*
 
-# Install adapter dependencies
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+# gmsh + other deps
 RUN pip install --no-cache-dir gmsh numpy scipy matplotlib pillow meshio
-
-# Verify gmsh works
-RUN python3 -c "import gmsh; gmsh.initialize(); gmsh.finalize()" || true
 
 # Copy project code
 COPY src/ /work/src/
