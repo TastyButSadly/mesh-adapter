@@ -3,7 +3,8 @@ FROM firedrakeproject/firedrake-vanilla-default:latest
 # Install adapter dependencies (CPU-only torch)
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
 
-# Install gmsh + other dependencies
+# Install gmsh + system deps + other dependencies
+RUN apt-get update -qq && apt-get install -y -qq libglu1-mesa > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir gmsh numpy scipy matplotlib pillow meshio
 
 # Copy project code
