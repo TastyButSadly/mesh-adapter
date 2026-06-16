@@ -1,11 +1,16 @@
 FROM firedrakeproject/firedrake-vanilla-default:latest
 
 # Install system deps for gmsh
-RUN apt-get update -qq && apt-get install -y -qq libgl1 libglu1-mesa > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && \
+    apt-get install -y -qq libgl1 libglu1-mesa libxft2 libx11-6 libxext6 libxrender1 libsm6 libice6 libfontconfig1 > /dev/null 2>&1 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install adapter dependencies
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
 RUN pip install --no-cache-dir gmsh numpy scipy matplotlib pillow meshio
+
+# Verify gmsh works
+RUN python3 -c "import gmsh; gmsh.initialize(); gmsh.finalize()" || true
 
 # Copy project code
 COPY src/ /work/src/
