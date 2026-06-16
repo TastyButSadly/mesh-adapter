@@ -187,10 +187,7 @@ def _manifest(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _prepare_meshes(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
-    from examples.firedrake.v_formation_compare import (
-        write_cylinder_refined_multi_cylinder_mesh,
-        write_uniform_multi_cylinder_mesh,
-    )
+    from examples.firedrake.v_formation_compare import write_uniform_multi_cylinder_mesh
     written: set[Path] = set()
     for entry in manifest["entries"]:
         mesh_path = Path(entry["mesh"])
@@ -200,11 +197,7 @@ def _prepare_meshes(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
             written.add(mesh_path)
             continue
         preview_path = mesh_path.with_suffix(".png") if args.preview else None
-        writer = (
-            write_cylinder_refined_multi_cylinder_mesh
-            if args.mesh_mode == "cylinder-refined"
-            else write_uniform_multi_cylinder_mesh
-        )
+        writer = write_uniform_multi_cylinder_mesh
         stats = writer(mesh_path, CASES[entry["case"]], float(entry["h"]), preview_path=preview_path)
         print(f"mesh {mesh_path}: points={stats['points']} triangles={stats['triangles']} h={entry['h']}")
         written.add(mesh_path)
