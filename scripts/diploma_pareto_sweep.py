@@ -18,11 +18,7 @@ if str(ROOT) not in sys.path:
 
 from examples.firedrake.multi_cylinder_meshes import CASES
 from examples.firedrake.postprocess_multi_cylinder_benchmark import _load_series, _summary
-from examples.firedrake.v_formation_compare import (
-    _fine_mesh_error_row,
-    write_cylinder_refined_multi_cylinder_mesh,
-    write_uniform_multi_cylinder_mesh,
-)
+from examples.firedrake.v_formation_compare import _fine_mesh_error_row
 
 
 METHODS = ("fixed", "monge-ampere", "mmpde-winslow", "gd-nsrj")
@@ -191,6 +187,10 @@ def _manifest(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _prepare_meshes(args: argparse.Namespace, manifest: dict[str, Any]) -> None:
+    from examples.firedrake.v_formation_compare import (
+        write_cylinder_refined_multi_cylinder_mesh,
+        write_uniform_multi_cylinder_mesh,
+    )
     written: set[Path] = set()
     for entry in manifest["entries"]:
         mesh_path = Path(entry["mesh"])
