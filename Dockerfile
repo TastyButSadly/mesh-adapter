@@ -1,11 +1,10 @@
-FROM firedrake-movement:latest
+FROM firedrakeproject/firedrake-vanilla-default:latest
 
-# Install adapter dependencies
+# Install adapter dependencies (CPU-only torch)
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
-RUN pip install --no-cache-dir numpy scipy matplotlib pillow meshio
 
-# Install gmsh Python bindings (works on x86_64 Linux)
-RUN pip install --no-cache-dir gmsh
+# Install gmsh + other dependencies
+RUN pip install --no-cache-dir gmsh numpy scipy matplotlib pillow meshio
 
 # Copy project code
 COPY src/ /work/src/
