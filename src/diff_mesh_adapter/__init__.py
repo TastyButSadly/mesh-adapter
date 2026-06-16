@@ -1,10 +1,17 @@
 from diff_mesh_adapter.adapt import (
     AdaptationConfig,
     AdaptationResult,
+    AdaptationTopologyCache,
     adapt_cell_area_equalization,
     adapt_mesh_quality,
     adapt_monitor_weighted_area,
+    adapt_monitor_weighted_area_analytic_fast,
     gaussian_cell_monitor,
+)
+from diff_mesh_adapter.autograd_transport import (
+    AutogradTransportConfig,
+    AutogradTransportTopologyCache,
+    adapt_autograd_transport_map,
 )
 from diff_mesh_adapter.geometry import (
     cell_abs_measures,
@@ -40,6 +47,16 @@ from diff_mesh_adapter.monitors import (
     moving_gaussian_ridge_solution,
     time_integrated_advecting_gaussian_gradient_monitor,
 )
+from diff_mesh_adapter.replicator import (
+    ReplicatorLaplacianConfig,
+    ReplicatorLaplacianTopologyCache,
+    adapt_replicator_laplacian,
+)
+from diff_mesh_adapter.sobolev_transport import (
+    SobolevTransportConfig,
+    SobolevTransportTopologyCache,
+    adapt_sobolev_transport_map,
+)
 from diff_mesh_adapter.visualization import (
     save_adaptation_vtu_artifacts,
     save_mesh_cell_scalar_comparison,
@@ -50,10 +67,21 @@ from diff_mesh_adapter.visualization import (
 __all__ = [
     "AdaptationConfig",
     "AdaptationResult",
+    "AdaptationTopologyCache",
+    "AutogradTransportConfig",
+    "AutogradTransportTopologyCache",
     "MeshState",
+    "ReplicatorLaplacianConfig",
+    "ReplicatorLaplacianTopologyCache",
+    "SobolevTransportConfig",
+    "SobolevTransportTopologyCache",
     "adapt_cell_area_equalization",
+    "adapt_autograd_transport_map",
     "adapt_mesh_quality",
     "adapt_monitor_weighted_area",
+    "adapt_monitor_weighted_area_analytic_fast",
+    "adapt_replicator_laplacian",
+    "adapt_sobolev_transport_map",
     "advecting_front_gradient_monitor",
     "advecting_gaussian_gradient_monitor",
     "advecting_gaussian_monitor",

@@ -1,0 +1,55 @@
+version: "3.8"
+services:
+  sweep:
+    build: .
+    deploy:
+      resources:
+        limits:
+          cpus: "8"        # например, 8 из 16 доступных
+          memory: 24G      # Firedrake + PyTorch + 4 параллельных прогона
+        reservations:
+          cpus: "4"
+          memory: 16G
+    volumes:
+      - ./outputs:/work/outputs
+    environment:
+      - OMP_NUM_THREADS=2          # нить OpenMP на каждый parallel run
+      - PETSC_OPTIONS=-options_left 0 -mat_type seqaij
+    command:
+      - "--output-root"
+      - "/work/outputs/pareto_server"
+      - "--cases"
+      - "v_formation"
+      - "multiple_cylinders"
+      - "--methods"
+      - "fixed"
+      - "gd-nsrj"
+      - "--h-values"
+      - "0.027"
+      - "0.024"
+      - "0.022"
+      - "0.020"
+      - "0.018"
+      - "0.016"
+      - "0.014"
+      - "0.012"
+      - "--reference-h"
+      - "0.003"
+      - "--gd-adapter-profiles"
+      - "regularized"
+      - "sobolev-transport"
+      - "--gd-monitor-build"
+      - "ns-residual-jump"
+      - "--steps"
+      - "500"
+      - "--adapt-every"
+      - "20"
+      - "--save-every"
+      - "50"
+      - "--repeats"
+      - "3"
+      - "--parallel"
+      - "4"
+      - "--prepare-meshes"
+      - "--run"
+      - "--postprocess"

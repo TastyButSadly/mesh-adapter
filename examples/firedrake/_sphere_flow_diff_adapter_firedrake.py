@@ -31,13 +31,13 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--adapt-every", type=int, default=20)
     parser.add_argument("--save-every", type=int, default=25)
-    parser.add_argument("--monitor-kind", choices=("velocity-gradient", "vorticity-magnitude"), default="velocity-gradient")
+    parser.add_argument("--monitor-kind", choices=("velocity-gradient", "vorticity-magnitude", "ns-residual-jump"), default="velocity-gradient")
     parser.add_argument("--monitor-scale", type=float, default=3.0)
     parser.add_argument("--adaptation-relaxation", type=float, default=1.0)
     parser.add_argument("--max-grid-speed", type=float, default=1.0)
     parser.add_argument("--adapter-steps", type=int, default=8)
     parser.add_argument("--adapter-lr", type=float, default=5.0e-4)
-    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only"), default="regularized")
+    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only", "replicator-laplace", "sobolev-transport"), default="regularized")
     parser.add_argument("--adapter-exchange-dir", type=Path, required=True)
     parser.add_argument("--adapter-poll-interval", type=float, default=0.02)
     args = parser.parse_args()
@@ -132,7 +132,7 @@ def run_case(
             current_coord = mesh.coordinates.dat.data_ro.copy()
 
             monitor_start = time.perf_counter()
-            monitor_val = _sphere_monitor(mesh, state.u_next, monitor_kind=monitor_kind, monitor_scale=monitor_scale)
+            monitor_val = _sphere_monitor(mesh, state.u_next, state.p_next, state.nu, monitor_kind=monitor_kind, monitor_scale=monitor_scale)
             metrics["timings_s"]["monitor"] += time.perf_counter() - monitor_start
             monitor_data = monitor_val.dat.data_ro.copy()
 
@@ -303,7 +303,7 @@ def _solve_step(state) -> None:
     state.solve3.solve()
 
 
-def _sphere_monitor(mesh, velocity, *, monitor_kind: str, monitor_scale: float) -> fd.Function:
+def _sphere_monitor(mesh, velocity, pressure, nu, *, monitor_kind: str, monitor_scale: float) -> fd.Function:
     function_space = fd.FunctionSpace(mesh, "CG", 1)
     grad_norm = fd.Function(function_space, name="monitor")
     if monitor_kind == "velocity-gradient":
@@ -315,30 +315,50 @@ def _sphere_monitor(mesh, velocity, *, monitor_kind: str, monitor_scale: float) 
         vorticity = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 1))
         vorticity.project(fd.curl(velocity))
         grad_norm.interpolate(fd.sqrt(fd.dot(vorticity, vorticity)))
+    elif monitor_kind == "ns-residual-jump":
+        q = fd.TestFunction(function_space)
+        h = fd.CellDiameter(mesh)
+        dim = mesh.geometric_dimension
+        stress = 2.0 * nu * fd.sym(fd.nabla_grad(velocity)) - pressure * fd.Identity(dim)
+        residual = fd.dot(velocity, fd.nabla_grad(velocity)) - fd.div(stress)
+        cell_form = (h**2 * fd.inner(residual, residual) + fd.div(velocity) ** 2) * q * fd.dx(domain=mesh)
+        cell_func = fd.assemble(cell_form)
+        eta_sq = np.maximum(cell_func.dat.data_ro.copy(), 0.0)
+        cell_area_func = fd.assemble(fd.CellVolume(mesh) * q * fd.dx(domain=mesh))
+        cell_area = np.abs(cell_area_func.dat.data_ro.copy())
+        indicator = np.sqrt(eta_sq / np.maximum(cell_area, 1.0e-14))
+        quantile = max(float(np.quantile(indicator, 0.90)), 1.0e-12)
+        normalized = (indicator / quantile) ** 2
+        monitor_vals = 1.0 + monitor_scale * normalized / (1.0 + normalized)
+        grad_norm.dat.data[:] = monitor_vals
     else:
         raise ValueError(f"Unknown monitor kind: {monitor_kind}")
 
-    np.minimum(grad_norm.dat.data, 1.0e3, out=grad_norm.dat.data)
-    np.maximum(grad_norm.dat.data, 0.0, out=grad_norm.dat.data)
-    max_value = max(float(grad_norm.dat.data_ro.max()), 1.0e-12)
-    grad_norm.dat.data[:] = grad_norm.dat.data_ro / max_value
+    if monitor_kind != "ns-residual-jump":
+        np.minimum(grad_norm.dat.data, 1.0e3, out=grad_norm.dat.data)
+        np.maximum(grad_norm.dat.data, 0.0, out=grad_norm.dat.data)
+        max_value = max(float(grad_norm.dat.data_ro.max()), 1.0e-12)
+        grad_norm.dat.data[:] = grad_norm.dat.data_ro / max_value
 
-    u = fd.TrialFunction(function_space)
-    v = fd.TestFunction(function_space)
-    dx_mean = float(mesh.cell_sizes.dat.data_ro.mean())
-    k_smooth = 15 * dx_mean**2 / 4
-    rhs = (monitor_scale * grad_norm) * v * fd.dx(domain=mesh)
-    lhs = (k_smooth * fd.dot(fd.grad(v), fd.grad(u)) + v * u) * fd.dx(domain=mesh)
-    smoothed = fd.Function(function_space)
-    fd.solve(
-        lhs == rhs,
-        smoothed,
-        solver_parameters={"ksp_type": "cg", "pc_type": "none"},
-        bcs=fd.DirichletBC(function_space, monitor_scale * grad_norm, "on_boundary"),
-    )
+        u = fd.TrialFunction(function_space)
+        v = fd.TestFunction(function_space)
+        dx_mean = float(mesh.cell_sizes.dat.data_ro.mean())
+        k_smooth = 15 * dx_mean**2 / 4
+        rhs = (monitor_scale * grad_norm) * v * fd.dx(domain=mesh)
+        lhs = (k_smooth * fd.dot(fd.grad(v), fd.grad(u)) + v * u) * fd.dx(domain=mesh)
+        smoothed = fd.Function(function_space)
+        fd.solve(
+            lhs == rhs,
+            smoothed,
+            solver_parameters={"ksp_type": "cg", "pc_type": "none"},
+            bcs=fd.DirichletBC(function_space, monitor_scale * grad_norm, "on_boundary"),
+        )
+        monitor = fd.Function(function_space, name="monitor")
+        monitor.project(1.0 + smoothed)
+    else:
+        monitor = fd.Function(function_space, name="monitor")
+        monitor.dat.data[:] = grad_norm.dat.data_ro
 
-    monitor = fd.Function(function_space, name="monitor")
-    monitor.project(1.0 + smoothed)
     return monitor
 
 

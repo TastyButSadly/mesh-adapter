@@ -9,15 +9,16 @@ description = "Differentiable fixed-topology mesh adaptation for externally gene
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "gmsh>=4.13",
     "matplotlib>=3.8",
     "meshio>=5.3",
     "numpy>=1.24",
     "pillow>=10",
+    "scipy>=1.15.3",
     "torch>=2.0",
 ]
 
 [project.optional-dependencies]
+meshing = ["gmsh>=4.13"]
 dev = [
     "pytest>=8.0",
 ]

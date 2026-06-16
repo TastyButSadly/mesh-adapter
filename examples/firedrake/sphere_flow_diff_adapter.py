@@ -21,13 +21,13 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--adapt-every", type=int, default=20)
     parser.add_argument("--save-every", type=int, default=25)
-    parser.add_argument("--monitor-kind", choices=("velocity-gradient", "vorticity-magnitude"), default="velocity-gradient")
+    parser.add_argument("--monitor-kind", choices=("velocity-gradient", "vorticity-magnitude", "ns-residual-jump"), default="velocity-gradient")
     parser.add_argument("--monitor-scale", type=float, default=3.0)
     parser.add_argument("--adaptation-relaxation", type=float, default=1.0)
     parser.add_argument("--max-grid-speed", type=float, default=1.0)
     parser.add_argument("--adapter-steps", type=int, default=8)
     parser.add_argument("--adapter-lr", type=float, default=5.0e-4)
-    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only"), default="regularized")
+    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only", "replicator-laplace", "sobolev-transport"), default="regularized")
     parser.add_argument("--adapter-poll-interval", type=float, default=0.02)
     args = parser.parse_args()
 
@@ -89,7 +89,7 @@ def main() -> None:
     stop_event = threading.Event()
     worker = threading.Thread(
         target=_serve_adapter_requests,
-        args=(exchange_dir, stop_event, adapter_poll_interval),
+        args=(exchange_dir, stop_event, adapter_poll_interval, 0),
         daemon=True,
     )
     worker.start()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import math
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -11,6 +12,7 @@ from diff_mesh_adapter.geometry import (
     cell_centroids,
     cell_signed_measures,
     cell_signed_measures_and_shape_energy,
+    triangle_signed_areas,
 )
 from diff_mesh_adapter.mesh import MeshState
 
@@ -60,6 +62,7 @@ class AdaptationResult:
     points_history_steps: list[int] | None = None
     stopped_step: int = 0
     early_stopped: bool = False
+    timings: dict[str, float] | None = None
 
     @property
     def initial_loss(self) -> float:
@@ -80,6 +83,101 @@ class _LossParts:
     measures: Tensor
     signed_measures: Tensor
     oriented_measures: Tensor
+
+
+@dataclass
+class AdaptationTopologyCache:
+    quality_key: tuple[object, ...] | None = None
+    quality_weights: Tensor | None = None
+    edge_key: tuple[object, ...] | None = None
+    edge_barrier_weights: tuple[Tensor, ...] | None = None
+    reference_edge_key: tuple[object, ...] | None = None
+    reference_edge_lengths: tuple[Tensor, ...] | None = None
+    triangle_edge_key: tuple[object, ...] | None = None
+    triangle_edges: Tensor | None = None
+
+    def quality_weights_for(
+            self,
+            cell_blocks: tuple[Tensor, ...],
+            boundary_nodes: Tensor,
+            config: AdaptationConfig,
+            *,
+            dtype: torch.dtype,
+            device: torch.device,
+    ) -> Tensor:
+        key = (
+            _topology_signature(cell_blocks, boundary_nodes),
+            float(config.quality_barrier_weight),
+            float(config.boundary_quality_barrier_weight),
+            str(dtype),
+            str(device),
+        )
+        if self.quality_key == key and self.quality_weights is not None:
+            return self.quality_weights
+        self.quality_key = key
+        self.quality_weights = _cell_quality_weights(cell_blocks, boundary_nodes, config).to(dtype=dtype,
+                                                                                             device=device)
+        return self.quality_weights
+
+    def edge_barrier_weights_for(
+            self,
+            cell_blocks: tuple[Tensor, ...],
+            boundary_nodes: Tensor,
+            point_dim: int,
+            config: AdaptationConfig,
+            *,
+            dtype: torch.dtype,
+            device: torch.device,
+    ) -> tuple[Tensor, ...] | None:
+        key = (
+            _topology_signature(cell_blocks, boundary_nodes),
+            int(point_dim),
+            float(config.edge_length_barrier_weight),
+            float(config.boundary_edge_length_barrier_weight),
+            str(dtype),
+            str(device),
+        )
+        if self.edge_key == key:
+            return self.edge_barrier_weights
+        self.edge_key = key
+        edge_barrier_weights = _edge_barrier_weights(cell_blocks, boundary_nodes, point_dim, config)
+        if edge_barrier_weights is not None:
+            edge_barrier_weights = tuple(weight.to(dtype=dtype, device=device) for weight in edge_barrier_weights)
+        self.edge_barrier_weights = edge_barrier_weights
+        return self.edge_barrier_weights
+
+    def reference_edge_lengths_for(
+            self,
+            reference_points: Tensor,
+            cell_blocks: tuple[Tensor, ...],
+        config: AdaptationConfig,
+    ) -> tuple[Tensor, ...]:
+        key = (
+            _cell_blocks_signature(cell_blocks),
+            tuple(reference_points.shape),
+            str(reference_points.dtype),
+            str(reference_points.device),
+            int(reference_points.data_ptr()),
+            float(config.area_eps),
+        )
+        if self.reference_edge_key == key and self.reference_edge_lengths is not None:
+            return self.reference_edge_lengths
+        self.reference_edge_key = key
+        self.reference_edge_lengths = _reference_edge_lengths(reference_points, cell_blocks, config)
+        return self.reference_edge_lengths
+
+    def triangle_edges_for(self, cells: Tensor) -> Tensor:
+        key = (
+            tuple(cells.shape),
+            str(cells.dtype),
+            str(cells.device),
+            int(cells.data_ptr()),
+        )
+        if self.triangle_edge_key == key and self.triangle_edges is not None:
+            return self.triangle_edges
+        self.triangle_edge_key = key
+        self.triangle_edges = _unique_triangle_edges(cells)
+        return self.triangle_edges
 
 
 ObjectiveFn = Callable[
@@ -311,6 +409,7 @@ def _run_fixed_topology_optimization(
         config: AdaptationConfig,
         objective_fn: ObjectiveFn,
         reference_points: Tensor | None = None,
+        topology_cache: AdaptationTopologyCache | None = None,
 ) -> AdaptationResult:
     if config is None:
         config = AdaptationConfig()
@@ -330,23 +429,44 @@ def _run_fixed_topology_optimization(
     if bool((initial_signed.abs() <= config.area_eps).any()):
         raise ValueError("Initial mesh contains degenerate cells with near-zero signed area")
     orientation = torch.sign(initial_signed).detach()
-    quality_weights = _cell_quality_weights(cell_blocks, boundary_nodes, config).to(dtype=points.dtype,
-                                                                                    device=points.device)
-    edge_barrier_weights = _edge_barrier_weights(cell_blocks, boundary_nodes, points.shape[1], config)
-    if edge_barrier_weights is not None:
-        edge_barrier_weights = tuple(
-            weight.to(dtype=points.dtype, device=points.device) for weight in edge_barrier_weights)
+    if topology_cache is None:
+        quality_weights = _cell_quality_weights(cell_blocks, boundary_nodes, config).to(dtype=points.dtype,
+                                                                                        device=points.device)
+        edge_barrier_weights = _edge_barrier_weights(cell_blocks, boundary_nodes, points.shape[1], config)
+        if edge_barrier_weights is not None:
+            edge_barrier_weights = tuple(
+                weight.to(dtype=points.dtype, device=points.device) for weight in edge_barrier_weights)
+    else:
+        quality_weights = topology_cache.quality_weights_for(
+            cell_blocks,
+            boundary_nodes,
+            config,
+            dtype=points.dtype,
+            device=points.device,
+        )
+        edge_barrier_weights = topology_cache.edge_barrier_weights_for(
+            cell_blocks,
+            boundary_nodes,
+            points.shape[1],
+            config,
+            dtype=points.dtype,
+            device=points.device,
+        )
     if config.min_step_cell_quality is not None:
         initial_quality = _cell_qualities(points, cell_blocks, config.area_eps).detach()
         if bool((initial_quality <= config.min_step_cell_quality).any()):
             raise ValueError("Initial mesh contains cells below min_step_cell_quality")
     if not reference_matches_initial or not _unit_edge_ratio_satisfies_step_limits(config):
         _validate_initial_edge_ratios(initial_points, reference_points, cell_blocks, config)
-    reference_edge_lengths = _reference_edge_lengths(reference_points, cell_blocks, config)
+    if topology_cache is None:
+        reference_edge_lengths = _reference_edge_lengths(reference_points, cell_blocks, config)
+    else:
+        reference_edge_lengths = topology_cache.reference_edge_lengths_for(reference_points, cell_blocks, config)
 
     optimizer = None if not config.restore_optimizer_state_on_invalid else torch.optim.Adam([points], lr=config.lr)
     exp_avg = torch.zeros_like(points)
     exp_avg_sq = torch.zeros_like(points)
+    previous_points = torch.empty_like(points)
     adam_step = 0
     current_lr = config.lr
 
@@ -408,7 +528,7 @@ def _run_fixed_topology_optimization(
                     points_history_steps.append(step)
             break
 
-        previous_points = points.detach().clone()
+        previous_points.copy_(points.detach())
         loss_parts.total.backward()
         if points.grad is not None:
             points.grad[boundary_nodes] = 0.0
@@ -476,6 +596,133 @@ def _same_tensor(left: Tensor, right: Tensor) -> bool:
     )
 
 
+def _require_fast_triangle_mesh(points: Tensor, cell_blocks: tuple[Tensor, ...]) -> Tensor:
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise NotImplementedError("analytic-fast is implemented only for 2D triangle meshes")
+    if len(cell_blocks) != 1 or cell_blocks[0].ndim != 2 or cell_blocks[0].shape[1] != 3:
+        raise NotImplementedError("analytic-fast is implemented only for single-block triangle meshes")
+    return cell_blocks[0]
+
+
+def _unique_triangle_edges(cells: Tensor) -> Tensor:
+    edges = torch.cat(
+        (
+            cells[:, [0, 1]],
+            cells[:, [1, 2]],
+            cells[:, [2, 0]],
+        ),
+        dim=0,
+    )
+    edges = torch.sort(edges, dim=1).values
+    return torch.unique(edges, dim=0)
+
+
+def _edge_lengths_for_edges(points: Tensor, edges: Tensor, eps: float) -> Tensor:
+    if edges.numel() == 0:
+        return torch.empty(0, dtype=points.dtype, device=points.device)
+    return torch.linalg.norm(points[edges[:, 0]] - points[edges[:, 1]], dim=1).clamp_min(eps)
+
+
+def _triangle_weighted_area_loss_state(
+        points: Tensor,
+        cells: Tensor,
+        orientation: Tensor,
+        monitor: Tensor,
+        eps: float,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    signed_measures = triangle_signed_areas(points, cells)
+    oriented_measures = signed_measures * orientation
+    weighted_measures = monitor * oriented_measures
+    weighted_sum = weighted_measures.sum().clamp_min(eps)
+    weighted_square_sum = weighted_measures.square().sum()
+    n_cells = max(int(weighted_measures.numel()), 1)
+    loss = weighted_square_sum * float(n_cells) / weighted_sum.square() - 1.0
+    return loss, oriented_measures, weighted_measures, weighted_sum, weighted_square_sum
+
+
+def _triangle_weighted_area_gradient(
+        points: Tensor,
+        cells: Tensor,
+        orientation: Tensor,
+        monitor: Tensor,
+        weighted_measures: Tensor,
+        weighted_sum: Tensor,
+        weighted_square_sum: Tensor,
+        eps: float,
+) -> Tensor:
+    vertices = points[cells]
+    p0 = vertices[:, 0]
+    p1 = vertices[:, 1]
+    p2 = vertices[:, 2]
+    n_cells = max(int(weighted_measures.numel()), 1)
+    dloss_dweighted = (
+            2.0
+            * float(n_cells)
+            * (weighted_measures * weighted_sum - weighted_square_sum)
+            / weighted_sum.clamp_min(eps).pow(3)
+    )
+    dloss_darea = monitor * dloss_dweighted
+    oriented_factor = 0.5 * orientation * dloss_darea
+
+    grad0 = torch.stack((p1[:, 1] - p2[:, 1], p2[:, 0] - p1[:, 0]), dim=1) * oriented_factor[:, None]
+    grad1 = torch.stack((p2[:, 1] - p0[:, 1], p0[:, 0] - p2[:, 0]), dim=1) * oriented_factor[:, None]
+    grad2 = torch.stack((p0[:, 1] - p1[:, 1], p1[:, 0] - p0[:, 0]), dim=1) * oriented_factor[:, None]
+
+    grad = torch.zeros_like(points)
+    grad.index_add_(0, cells[:, 0], grad0)
+    grad.index_add_(0, cells[:, 1], grad1)
+    grad.index_add_(0, cells[:, 2], grad2)
+    return grad
+
+
+def _triangle_displacement_smoothness_loss(
+        points: Tensor,
+        initial_points: Tensor,
+        edges: Tensor,
+        weight: float,
+) -> Tensor:
+    if weight == 0.0 or edges.numel() == 0:
+        return torch.zeros((), dtype=points.dtype, device=points.device)
+
+    displacement = points - initial_points
+    diff = displacement[edges[:, 0]] - displacement[edges[:, 1]]
+    scale = float(weight) / max(int(edges.shape[0]), 1)
+    return scale * diff.square().sum()
+
+
+def _triangle_displacement_smoothness_gradient(
+        points: Tensor,
+        initial_points: Tensor,
+        edges: Tensor,
+        weight: float,
+) -> Tensor:
+    if weight == 0.0 or edges.numel() == 0:
+        return torch.zeros_like(points)
+
+    displacement = points - initial_points
+    diff = displacement[edges[:, 0]] - displacement[edges[:, 1]]
+    scale = float(weight) / max(int(edges.shape[0]), 1)
+    grad = torch.zeros_like(points)
+    edge_grad = 2.0 * scale * diff
+    grad.index_add_(0, edges[:, 0], edge_grad)
+    grad.index_add_(0, edges[:, 1], -edge_grad)
+    return grad
+
+
+def _topology_signature(cell_blocks: tuple[Tensor, ...], boundary_nodes: Tensor) -> tuple[object, ...]:
+    return (
+        _cell_blocks_signature(cell_blocks),
+        tuple(boundary_nodes.shape),
+        str(boundary_nodes.dtype),
+        str(boundary_nodes.device),
+        int(boundary_nodes.data_ptr()),
+    )
+
+
+def _cell_blocks_signature(cell_blocks: tuple[Tensor, ...]) -> tuple[object, ...]:
+    return tuple((tuple(block.shape), str(block.dtype), str(block.device), int(block.data_ptr())) for block in cell_blocks)
+
+
 def _unit_edge_ratio_satisfies_step_limits(config: AdaptationConfig) -> bool:
     max_ok = config.max_step_edge_stretch is None or config.max_step_edge_stretch > 1.0
     min_ok = config.min_step_edge_compression is None or config.min_step_edge_compression < 1.0
@@ -509,10 +756,11 @@ def adapt_cell_area_equalization(
         config: AdaptationConfig | None = None,
         *,
         reference_points: Tensor | None = None,
+        topology_cache: AdaptationTopologyCache | None = None,
 ) -> AdaptationResult:
     """Equalize fixed-topology 2D cell areas or 3D tetra volumes by moving non-boundary nodes."""
     return _run_fixed_topology_optimization(mesh, config or AdaptationConfig(), _area_equalization_objective,
-                                            reference_points)
+                                            reference_points, topology_cache)
 
 
 def adapt_mesh_quality(
@@ -520,10 +768,11 @@ def adapt_mesh_quality(
         config: AdaptationConfig | None = None,
         *,
         reference_points: Tensor | None = None,
+        topology_cache: AdaptationTopologyCache | None = None,
 ) -> AdaptationResult:
     """Improve fixed-topology mesh shape quality without changing connectivity."""
     return _run_fixed_topology_optimization(mesh, config or AdaptationConfig(), _quality_repair_objective,
-                                            reference_points)
+                                            reference_points, topology_cache)
 
 
 def adapt_monitor_weighted_area(
@@ -532,10 +781,197 @@ def adapt_monitor_weighted_area(
         config: AdaptationConfig | None = None,
         *,
         reference_points: Tensor | None = None,
+        topology_cache: AdaptationTopologyCache | None = None,
 ) -> AdaptationResult:
     """Equidistribute monitor-weighted cell areas."""
     return _run_fixed_topology_optimization(mesh, config or AdaptationConfig(),
-                                            _monitor_weighted_area_objective(monitor_fn), reference_points)
+                                            _monitor_weighted_area_objective(monitor_fn), reference_points,
+                                            topology_cache)
+
+
+def adapt_monitor_weighted_area_analytic_fast(
+        mesh: MeshState,
+        cell_monitor: Tensor,
+        config: AdaptationConfig | None = None,
+        *,
+        reference_points: Tensor | None = None,
+        topology_cache: AdaptationTopologyCache | None = None,
+) -> AdaptationResult:
+    """Equidistribute fixed triangle cell monitors with analytic gradients and validated steps."""
+    config = config or AdaptationConfig()
+    reference_matches_initial = reference_points is None or _same_tensor(reference_points, mesh.points)
+    initial_points = mesh.points.detach().clone()
+    if reference_matches_initial:
+        reference_points = initial_points
+    else:
+        reference_points = reference_points.detach().clone().to(device=initial_points.device,
+                                                                dtype=initial_points.dtype)
+    if reference_points.shape != initial_points.shape:
+        raise ValueError("reference_points must have the same shape as mesh.points")
+
+    points = initial_points.clone().detach()
+    cell_blocks = tuple(block.detach().to(device=points.device) for block in mesh.cell_blocks)
+    cells = _require_fast_triangle_mesh(points, cell_blocks)
+    boundary_nodes = mesh.boundary_nodes.detach().to(device=points.device)
+    monitor = cell_monitor.detach().to(device=points.device, dtype=points.dtype).reshape(-1).clamp_min(
+        config.area_eps)
+    if monitor.numel() != cells.shape[0]:
+        raise ValueError("cell_monitor must contain one value per triangle")
+
+    initial_signed = triangle_signed_areas(initial_points, cells).detach()
+    if bool((initial_signed.abs() <= config.area_eps).any()):
+        raise ValueError("Initial mesh contains degenerate cells with near-zero signed area")
+    orientation = torch.sign(initial_signed).detach()
+    if not reference_matches_initial or not _unit_edge_ratio_satisfies_step_limits(config):
+        _validate_initial_edge_ratios(initial_points, reference_points, cell_blocks, config)
+    if topology_cache is None:
+        graph_edges = _unique_triangle_edges(cells)
+    else:
+        graph_edges = topology_cache.triangle_edges_for(cells)
+    reference_graph_edge_lengths = _edge_lengths_for_edges(reference_points, graph_edges, config.area_eps)
+
+    exp_avg = torch.zeros_like(points)
+    exp_avg_sq = torch.zeros_like(points)
+    adam_step = 0
+    current_lr = config.lr
+    timings = {
+        "adapter_forward_loss": 0.0,
+        "adapter_backward_or_grad": 0.0,
+        "adapter_validation": 0.0,
+        "adapter_step": 0.0,
+    }
+
+    loss_history: list[float] = []
+    area_std_history: list[float] = []
+    min_area_history: list[float] = []
+    lr_history: list[float] = []
+    points_history: list[Tensor] | None = [] if config.store_history else None
+    points_history_steps: list[int] | None = [] if config.store_history else None
+    history_stride = max(int(config.history_stride), 1)
+    best_loss = float("inf")
+    stale_steps = 0
+    stopped_step = config.steps
+    early_stopped = False
+
+    for step in range(config.steps + 1):
+        forward_start = time.perf_counter()
+        loss_eq, oriented_measures, weighted_measures, weighted_sum, weighted_square_sum = (
+            _triangle_weighted_area_loss_state(points, cells, orientation, monitor, config.area_eps)
+        )
+        movement_loss = config.movement_weight * _movement_loss(points, initial_points)
+        smoothness_loss = _triangle_displacement_smoothness_loss(
+            points,
+            initial_points,
+            graph_edges,
+            config.smoothness_weight,
+        )
+        total_loss = loss_eq + movement_loss + smoothness_loss
+        timings["adapter_forward_loss"] += time.perf_counter() - forward_start
+
+        loss_value = float(total_loss.detach())
+        loss_history.append(loss_value)
+        if config.collect_step_diagnostics:
+            measures = oriented_measures.detach().abs()
+            area_std_history.append(float(measures.std(unbiased=False)))
+            min_area_history.append(float(oriented_measures.detach().min()))
+            lr_history.append(current_lr)
+        if points_history is not None and (step % history_stride == 0 or step == config.steps):
+            points_history.append(points.detach().cpu().clone())
+            if points_history_steps is not None:
+                points_history_steps.append(step)
+
+        if _is_early_stopping_improvement(loss_value, best_loss, config):
+            best_loss = loss_value
+            stale_steps = 0
+        else:
+            stale_steps += 1
+
+        if step == config.steps:
+            stopped_step = step
+            break
+
+        if config.early_stopping_patience is not None and stale_steps >= config.early_stopping_patience:
+            stopped_step = step
+            early_stopped = True
+            if points_history is not None and (points_history_steps is None or points_history_steps[-1] != step):
+                points_history.append(points.detach().cpu().clone())
+                if points_history_steps is not None:
+                    points_history_steps.append(step)
+            break
+
+        grad_start = time.perf_counter()
+        grad = _triangle_weighted_area_gradient(
+            points,
+            cells,
+            orientation,
+            monitor,
+            weighted_measures,
+            weighted_sum,
+            weighted_square_sum,
+            config.area_eps,
+        )
+        if config.movement_weight != 0.0:
+            grad = grad + (2.0 * config.movement_weight / max(points.shape[0], 1)) * (points - initial_points)
+        if config.smoothness_weight != 0.0:
+            grad = grad + _triangle_displacement_smoothness_gradient(
+                points,
+                initial_points,
+                graph_edges,
+                config.smoothness_weight,
+            )
+        grad[boundary_nodes] = 0.0
+        points.grad = grad
+        if config.grad_clip is not None:
+            _clip_single_tensor_grad_(points, config.grad_clip)
+        timings["adapter_backward_or_grad"] += time.perf_counter() - grad_start
+
+        previous_points = points.detach().clone()
+        step_start = time.perf_counter()
+        adam_step += 1
+        _adam_step_single_tensor_(points, exp_avg, exp_avg_sq, adam_step, current_lr)
+        with torch.no_grad():
+            points[boundary_nodes] = initial_points[boundary_nodes]
+        timings["adapter_step"] += time.perf_counter() - step_start
+
+        validation_start = time.perf_counter()
+        with torch.no_grad():
+            oriented_after = triangle_signed_areas(points, cells) * orientation
+            invalid = (not bool(torch.isfinite(oriented_after).all())) or bool(
+                (oriented_after <= config.area_eps).any())
+            if not invalid and config.min_step_cell_quality is not None:
+                quality_after = _cell_qualities(points, cell_blocks, config.area_eps)
+                invalid = (not bool(torch.isfinite(quality_after).all())) or bool(
+                    (quality_after <= config.min_step_cell_quality).any())
+            if not invalid and (
+                    config.max_step_edge_stretch is not None or config.min_step_edge_compression is not None):
+                edge_ratios_after = _edge_lengths_for_edges(points, graph_edges, config.area_eps) / reference_graph_edge_lengths
+                invalid = not bool(torch.isfinite(edge_ratios_after).all())
+                if not invalid and config.max_step_edge_stretch is not None:
+                    invalid = bool((edge_ratios_after >= config.max_step_edge_stretch).any())
+                if not invalid and config.min_step_edge_compression is not None:
+                    invalid = bool((edge_ratios_after <= config.min_step_edge_compression).any())
+            if invalid:
+                points.copy_(previous_points)
+                current_lr = max(current_lr * config.lr_shrink, config.min_lr)
+        timings["adapter_validation"] += time.perf_counter() - validation_start
+
+    final_mesh = MeshState(
+        points=points.detach(),
+        cell_blocks=tuple(block.detach() for block in cell_blocks),
+        boundary_nodes=boundary_nodes.detach(),
+    )
+    return AdaptationResult(
+        mesh=final_mesh,
+        loss_history=loss_history,
+        area_std_history=area_std_history,
+        min_area_history=min_area_history,
+        lr_history=lr_history,
+        points_history=points_history,
+        points_history_steps=points_history_steps,
+        stopped_step=stopped_step,
+        early_stopped=early_stopped,
+        timings=timings,
+    )
 
 
 def _is_early_stopping_improvement(loss_value: float, best_loss: float, config: AdaptationConfig) -> bool:

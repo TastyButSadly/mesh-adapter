@@ -156,6 +156,12 @@ def _read_vtu(path: Path) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]
         triangles[1::4] = np.stack([c3, c1, c4], axis=1)
         triangles[2::4] = np.stack([c5, c4, c2], axis=1)
         triangles[3::4] = np.stack([c3, c4, c5], axis=1)
+    elif set(types.tolist()) == {10}:
+        triangles = connectivity.reshape(num_cells, 4)
+    elif set(types.tolist()) == {71}:
+        # Firedrake P2 tetrahedra: 10 nodes per cell (4 corner + 6 edge midpoint)
+        conn10 = connectivity.reshape(num_cells, 10)
+        triangles = conn10[:, :4].copy()
     else:
         triangles = connectivity.reshape(num_cells, 3)
 

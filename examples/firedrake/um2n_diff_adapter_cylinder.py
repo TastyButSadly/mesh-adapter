@@ -29,24 +29,46 @@ def main() -> None:
     parser.add_argument("--monitor-frame", choices=("reference", "current"), default="reference")
     parser.add_argument(
         "--monitor-build",
-        choices=("firedrake-smoothed", "raw-gradient", "graph-gradient", "raw-vorticity", "composite-grad-vort"),
+        choices=("firedrake-smoothed", "raw-gradient", "graph-gradient", "hessian-zz", "raw-vorticity", "composite-grad-vort", "learned-v4", "ns-residual-jump", "ns-rj-hybrid", "ns-rj-vorticity-hessian"),
         default="firedrake-smoothed",
     )
+    parser.add_argument("--learned-monitor-weights", type=Path, default=None)
+    parser.add_argument("--learned-monitor-field", choices=("vorticity_abs", "grad_u_norm"), default="vorticity_abs")
+    parser.add_argument("--learned-monitor-feature-mode", choices=("full7", "fast5"), default="full7")
+    parser.add_argument("--learned-monitor-baseline-build",
+                        choices=("none", "raw-gradient", "graph-gradient", "raw-vorticity", "composite-grad-vort"),
+                        default="none")
+    parser.add_argument("--learned-monitor-blend", type=float, default=1.0,
+                        help="1.0=pure learned, 0.0=pure learned-monitor baseline build.")
+    parser.add_argument("--learned-monitor-recalibrate", action="store_true")
     parser.add_argument("--monitor-scale", type=float, default=0.2)
     parser.add_argument("--monitor-graph-smoothing-steps", type=int, default=4)
     parser.add_argument("--monitor-graph-smoothing-weight", type=float, default=0.5)
+    parser.add_argument("--monitor-vorticity-hessian-weight", type=float, default=2.0)
+    parser.add_argument("--monitor-vorticity-abs-weight", type=float, default=0.5)
+    parser.add_argument("--hybrid-full-every", type=int, default=5)
+    parser.add_argument("--hybrid-drift-threshold", type=float, default=0.5)
     parser.add_argument("--adaptation-relaxation", type=float, default=1.0)
     parser.add_argument("--max-grid-speed", type=float, default=5.0)
     parser.add_argument("--adapter-steps", type=int, default=80)
     parser.add_argument("--adapter-lr", type=float, default=8e-4)
-    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only"), default="regularized")
+    parser.add_argument("--adapter-profile", choices=("regularized", "monitor-only", "analytic-fast", "analytic-fast-v2", "replicator-laplace", "sobolev-transport"), default="regularized")
     parser.add_argument("--adapter-preset", choices=("custom", "accurate", "fast", "faster"), default="custom")
     parser.add_argument("--adapter-dtype", choices=("float64", "float32"), default="float64")
+    parser.add_argument("--adapter-movement-weight", type=float, default=None)
+    parser.add_argument("--adapter-smoothness-weight", type=float, default=None)
+    parser.add_argument("--adapter-max-step-edge-stretch", type=float, default=None)
+    parser.add_argument("--adapter-min-step-edge-compression", type=float, default=None)
     parser.add_argument("--adapter-transport", choices=("npz", "tcp"), default="tcp")
     parser.add_argument("--adapter-tcp-host", default="host.docker.internal")
     parser.add_argument("--adapter-torch-threads", type=int, default=1)
     parser.add_argument("--adapter-poll-interval", type=float, default=0.001)
     args = parser.parse_args()
+    if args.monitor_build == "learned-v4":
+        if args.learned_monitor_weights is None:
+            parser.error("--learned-monitor-weights is required when --monitor-build=learned-v4")
+        if args.adapter_profile in {"replicator-laplace", "analytic-fast", "analytic-fast-v2", "sobolev-transport"}:
+            parser.error(f"--monitor-build=learned-v4 requires the regularized adapter profile, not {args.adapter_profile}")
     adapter_poll_interval = max(args.adapter_poll_interval, 0.001)
     adapter_steps = _adapter_steps_for_preset(args.adapter_preset, args.adapter_steps)
 
@@ -55,6 +77,11 @@ def main() -> None:
     try:
         command_output_dir = _container_visible_path(output_dir, cwd, "--output-dir")
         command_mesh = _container_visible_path(args.mesh, cwd, "--mesh")
+        command_learned_weights = (
+            _container_visible_path(args.learned_monitor_weights, cwd, "--learned-monitor-weights")
+            if args.learned_monitor_weights is not None
+            else None
+        )
     except ValueError as exc:
         parser.error(str(exc))
     if output_dir.exists():
@@ -102,6 +129,22 @@ def main() -> None:
         str(args.monitor_graph_smoothing_steps),
         "--monitor-graph-smoothing-weight",
         str(args.monitor_graph_smoothing_weight),
+        "--monitor-vorticity-hessian-weight",
+        str(args.monitor_vorticity_hessian_weight),
+        "--monitor-vorticity-abs-weight",
+        str(args.monitor_vorticity_abs_weight),
+        "--hybrid-full-every",
+        str(args.hybrid_full_every),
+        "--hybrid-drift-threshold",
+        str(args.hybrid_drift_threshold),
+        "--learned-monitor-field",
+        args.learned_monitor_field,
+        "--learned-monitor-feature-mode",
+        args.learned_monitor_feature_mode,
+        "--learned-monitor-baseline-build",
+        args.learned_monitor_baseline_build,
+        "--learned-monitor-blend",
+        str(args.learned_monitor_blend),
         "--adaptation-relaxation",
         str(args.adaptation_relaxation),
         "--max-grid-speed",
@@ -125,6 +168,18 @@ def main() -> None:
         "--adapter-torch-threads",
         str(args.adapter_torch_threads),
     ]
+    if args.adapter_movement_weight is not None:
+        command.extend(["--adapter-movement-weight", str(args.adapter_movement_weight)])
+    if args.adapter_smoothness_weight is not None:
+        command.extend(["--adapter-smoothness-weight", str(args.adapter_smoothness_weight)])
+    if args.adapter_max_step_edge_stretch is not None:
+        command.extend(["--adapter-max-step-edge-stretch", str(args.adapter_max_step_edge_stretch)])
+    if args.adapter_min_step_edge_compression is not None:
+        command.extend(["--adapter-min-step-edge-compression", str(args.adapter_min_step_edge_compression)])
+    if command_learned_weights is not None:
+        command.extend(["--learned-monitor-weights", command_learned_weights.as_posix()])
+    if args.learned_monitor_recalibrate:
+        command.append("--learned-monitor-recalibrate")
     if args.adapter_transport == "tcp":
         command.extend(["--adapter-tcp-host", args.adapter_tcp_host, "--adapter-tcp-port", str(tcp_port)])
     stop_event = threading.Event()
@@ -191,6 +246,17 @@ def _serve_adapter_requests(exchange_dir: Path, stop_event: threading.Event, pol
                     profile=str(data["profile"]) if "profile" in data else "regularized",
                     dtype=_npz_string(data, "dtype", "float64"),
                     cell_monitor_np=data["cell_monitor"] if "cell_monitor" in data else None,
+                    learned_u_nodes_np=data["learned_u_nodes"] if "learned_u_nodes" in data else None,
+                    learned_weights_path=_npz_string(data, "learned_weights_path", None),
+                    learned_feature_mode=_npz_string(data, "learned_feature_mode", "full7"),
+                    learned_recalibrate=bool(data["learned_recalibrate"]) if "learned_recalibrate" in data else True,
+                    learned_blend=float(data["learned_blend"]) if "learned_blend" in data else 1.0,
+                    learned_smoothing_steps=int(data["learned_smoothing_steps"]) if "learned_smoothing_steps" in data else 0,
+                    learned_smoothing_weight=float(data["learned_smoothing_weight"]) if "learned_smoothing_weight" in data else 0.5,
+                    movement_weight=_npz_float(data, "adapter_movement_weight"),
+                    smoothness_weight=_npz_float(data, "adapter_smoothness_weight"),
+                    max_step_edge_stretch=_npz_float(data, "adapter_max_step_edge_stretch"),
+                    min_step_edge_compression=_npz_float(data, "adapter_min_step_edge_compression"),
                     topology_cache=topology_cache,
                 )
                 info["service_s"] = time.perf_counter() - service_start
@@ -249,6 +315,17 @@ def _serve_adapter_tcp(server: socket.socket, stop_event: threading.Event, adapt
                         profile=str(scalars.get("profile", "regularized")),
                         dtype=str(scalars.get("dtype", "float64")),
                         cell_monitor_np=arrays.get("cell_monitor"),
+                        learned_u_nodes_np=arrays.get("learned_u_nodes"),
+                        learned_weights_path=scalars.get("learned_weights_path"),
+                        learned_feature_mode=str(scalars.get("learned_feature_mode", "full7")),
+                        learned_recalibrate=bool(scalars.get("learned_recalibrate", True)),
+                        learned_blend=float(scalars.get("learned_blend", 1.0)),
+                        learned_smoothing_steps=int(scalars.get("learned_smoothing_steps", 0)),
+                        learned_smoothing_weight=float(scalars.get("learned_smoothing_weight", 0.5)),
+                        movement_weight=_scalar_float(scalars, "adapter_movement_weight"),
+                        smoothness_weight=_scalar_float(scalars, "adapter_smoothness_weight"),
+                        max_step_edge_stretch=_scalar_float(scalars, "adapter_max_step_edge_stretch"),
+                        min_step_edge_compression=_scalar_float(scalars, "adapter_min_step_edge_compression"),
                         topology_cache=topology_cache,
                     )
                     info["service_s"] = time.perf_counter() - service_start
@@ -261,6 +338,14 @@ def _serve_adapter_tcp(server: socket.socket, stop_event: threading.Event, adapt
                             "steps_completed": info["steps_completed"],
                             "early_stopped": info["early_stopped"],
                             "service_s": info["service_s"],
+                            "adapter_forward_loss": info.get("adapter_forward_loss", 0.0),
+                            "adapter_backward_or_grad": info.get("adapter_backward_or_grad", 0.0),
+                            "adapter_sobolev_solve": info.get("adapter_sobolev_solve", 0.0),
+                            "adapter_validation": info.get("adapter_validation", 0.0),
+                            "adapter_step": info.get("adapter_step", 0.0),
+                            "adapter_alpha": info.get("adapter_alpha", 0.0),
+                            "adapter_cg_iters": info.get("adapter_cg_iters", 0.0),
+                            "adapter_cg_residual": info.get("adapter_cg_residual", 0.0),
                         },
                         arrays={"points": points},
                     )
@@ -311,6 +396,18 @@ def _npz_string(data: np.lib.npyio.NpzFile, key: str, default: str) -> str:
     return str(value)
 
 
+def _npz_float(data: np.lib.npyio.NpzFile, key: str) -> float | None:
+    if key not in data:
+        return None
+    value = data[key]
+    return float(value.item() if value.shape == () else value)
+
+
+def _scalar_float(scalars: dict[str, object], key: str) -> float | None:
+    value = scalars.get(key)
+    return None if value is None else float(value)
+
+
 def _container_visible_path(path: Path, cwd: Path, argument_name: str) -> Path:
     if not path.is_absolute():
         return path
@@ -334,6 +431,14 @@ def _write_adapter_response(path: Path, points: np.ndarray, info: dict[str, floa
             steps_completed=np.array(info["steps_completed"], dtype=np.int64),
             early_stopped=np.array(info["early_stopped"], dtype=bool),
             service_s=np.array(info.get("service_s", np.nan), dtype=np.float64),
+            adapter_forward_loss=np.array(info.get("adapter_forward_loss", 0.0), dtype=np.float64),
+            adapter_backward_or_grad=np.array(info.get("adapter_backward_or_grad", 0.0), dtype=np.float64),
+            adapter_sobolev_solve=np.array(info.get("adapter_sobolev_solve", 0.0), dtype=np.float64),
+            adapter_validation=np.array(info.get("adapter_validation", 0.0), dtype=np.float64),
+            adapter_step=np.array(info.get("adapter_step", 0.0), dtype=np.float64),
+            adapter_alpha=np.array(info.get("adapter_alpha", 0.0), dtype=np.float64),
+            adapter_cg_iters=np.array(info.get("adapter_cg_iters", 0.0), dtype=np.float64),
+            adapter_cg_residual=np.array(info.get("adapter_cg_residual", 0.0), dtype=np.float64),
         )
     tmp_path.rename(path)
 
